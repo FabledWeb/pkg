@@ -1,0 +1,260 @@
+/* eslint-disable operator-linebreak */
+
+'use strict'; // eslint-disable-line
+
+var common = require('../prelude/common.js');
+var generate = require('escodegen').generate;
+var parse = require('acorn').parse;
+
+var ALIAS_AS_RELATIVE = common.ALIAS_AS_RELATIVE;
+var ALIAS_AS_RESOLVABLE = common.ALIAS_AS_RESOLVABLE;
+
+function forge(pattern, was) {
+  if (was.v2) {
+    return pattern.replace('{c1}', ', ').replace('{v1}', '"' + was.v1 + '"').replace('{c2}', ', ').replace('{v2}', '"' + was.v2 + '"');
+  } else {
+    return pattern.replace('{c1}', ', ').replace('{v1}', '"' + was.v1 + '"').replace('{c2}', '').replace('{v2}', '');
+  }
+}
+
+function valid2(v2) {
+  return typeof v2 === 'undefined' || v2 === null || v2 === 'must-exclude' || v2 === 'may-exclude';
+}
+
+function visitor_REQUIRE_RESOLVE(n) {
+  // eslint-disable-line camelcase
+  var c = n.callee;
+  if (!c) return null;
+  var ci = c.object && c.object.type === 'Identifier' && c.object.name === 'require' && c.property && c.property.type === 'Identifier' && c.property.name === 'resolve';
+  if (!ci) return null;
+  var f = n.type === 'CallExpression' && n.arguments && n.arguments[0] && n.arguments[0].type === 'Literal';
+  if (!f) return null;
+  var m = n.arguments[1] && n.arguments[1].type === 'Literal';
+  return { v1: n.arguments[0].value,
+    v2: m ? n.arguments[1].value : null };
+}
+
+function visitor_REQUIRE(n) {
+  // eslint-disable-line camelcase
+  var c = n.callee;
+  if (!c) return null;
+  var ci = c.type === 'Identifier' && c.name === 'require';
+  if (!ci) return null;
+  var f = n.type === 'CallExpression' && n.arguments && n.arguments[0] && n.arguments[0].type === 'Literal';
+  if (!f) return null;
+  var m = n.arguments[1] && n.arguments[1].type === 'Literal';
+  return { v1: n.arguments[0].value,
+    v2: m ? n.arguments[1].value : null };
+}
+
+function visitor_PATH_JOIN(n) {
+  // eslint-disable-line camelcase
+  var c = n.callee;
+  if (!c) return null;
+  var ci = c.object && c.object.type === 'Identifier' && c.object.name === 'path' && c.property && c.property.type === 'Identifier' && c.property.name === 'join';
+  if (!ci) return null;
+  var dn = n.arguments[0] && n.arguments[0].type === 'Identifier' && n.arguments[0].name === '__dirname';
+  if (!dn) return null;
+  var f = n.type === 'CallExpression' && n.arguments && n.arguments[1] && n.arguments[1].type === 'Literal' && n.arguments.length === 2; // TODO concate them
+  if (!f) return null;
+  return { v1: n.arguments[1].value };
+}
+
+module.exports.visitor_SUCCESSFUL = function (node, test) {
+  // eslint-disable-line camelcase
+  var mustExclude = void 0,
+      mayExclude = void 0,
+      was = void 0;
+
+  was = visitor_REQUIRE_RESOLVE(node);
+  if (was) {
+    if (test) return forge('require.resolve({v1}{c2}{v2})', was);
+    if (!valid2(was.v2)) return null;
+    mustExclude = was.v2 === 'must-exclude';
+    mayExclude = was.v2 === 'may-exclude';
+    return { alias: was.v1,
+      aliasType: ALIAS_AS_RESOLVABLE,
+      mustExclude: mustExclude,
+      mayExclude: mayExclude };
+  }
+
+  was = visitor_REQUIRE(node);
+  if (was) {
+    if (test) return forge('require({v1}{c2}{v2})', was);
+    if (!valid2(was.v2)) return null;
+    mustExclude = was.v2 === 'must-exclude';
+    mayExclude = was.v2 === 'may-exclude';
+    return { alias: was.v1,
+      aliasType: ALIAS_AS_RESOLVABLE,
+      mustExclude: mustExclude,
+      mayExclude: mayExclude };
+  }
+
+  was = visitor_PATH_JOIN(node);
+  if (was) {
+    if (test) return forge('path.join(__dirname{c1}{v1})', was);
+    return { alias: was.v1,
+      aliasType: ALIAS_AS_RELATIVE,
+      mayExclude: false };
+  }
+
+  return null;
+};
+
+function visitor_NONLITERAL(n) {
+  // eslint-disable-line camelcase
+  return function () {
+    var c = n.callee;
+    if (!c) return null;
+    var ci = c.object && c.object.type === 'Identifier' && c.object.name === 'require' && c.property && c.property.type === 'Identifier' && c.property.name === 'resolve';
+    if (!ci) return null;
+    var f = n.type === 'CallExpression' && n.arguments && n.arguments[0] && n.arguments[0].type !== 'Literal';
+    if (!f) return null;
+    var m = n.arguments[1];
+    if (!m) return { v1: reconstruct(n.arguments[0]) };
+    var q = n.arguments[1] && n.arguments[1].type === 'Literal';
+    if (!q) return null;
+    return { v1: reconstruct(n.arguments[0]),
+      v2: n.arguments[1].value };
+  }() || function () {
+    var c = n.callee;
+    if (!c) return null;
+    var ci = c.type === 'Identifier' && c.name === 'require';
+    if (!ci) return null;
+    var f = n.type === 'CallExpression' && n.arguments && n.arguments[0] && n.arguments[0].type !== 'Literal';
+    if (!f) return null;
+    var m = n.arguments[1];
+    if (!m) return { v1: reconstruct(n.arguments[0]) };
+    var q = n.arguments[1] && n.arguments[1].type === 'Literal';
+    if (!q) return null;
+    return { v1: reconstruct(n.arguments[0]),
+      v2: n.arguments[1].value };
+  }();
+}
+
+module.exports.visitor_NONLITERAL = function (node) {
+  // eslint-disable-line camelcase
+  var mustExclude = void 0,
+      mayExclude = void 0,
+      was = void 0;
+
+  was = visitor_NONLITERAL(node);
+  if (was) {
+    if (!valid2(was.v2)) return null;
+    mustExclude = was.v2 === 'must-exclude';
+    mayExclude = was.v2 === 'may-exclude';
+    return { alias: was.v1,
+      mustExclude: mustExclude,
+      mayExclude: mayExclude };
+  }
+
+  return null;
+};
+
+function visitor_MALFORMED(n) {
+  // eslint-disable-line camelcase
+  return function () {
+    var c = n.callee;
+    if (!c) return null;
+    var ci = c.object && c.object.type === 'Identifier' && c.object.name === 'require' && c.property && c.property.type === 'Identifier' && c.property.name === 'resolve';
+    if (!ci) return null;
+    var f = n.type === 'CallExpression' && n.arguments && n.arguments[0];
+    if (!f) return null;
+    return { v1: reconstruct(n.arguments[0]) };
+  }() || function () {
+    var c = n.callee;
+    if (!c) return null;
+    var ci = c.type === 'Identifier' && c.name === 'require';
+    if (!ci) return null;
+    var f = n.type === 'CallExpression' && n.arguments && n.arguments[0];
+    if (!f) return null;
+    return { v1: reconstruct(n.arguments[0]) };
+  }();
+}
+
+module.exports.visitor_MALFORMED = function (node) {
+  // eslint-disable-line camelcase
+  var was = void 0;
+
+  was = visitor_MALFORMED(node);
+  if (was) return { alias: was.v1 };
+
+  return null;
+};
+
+function visitor_USESCWD(n) {
+  // eslint-disable-line camelcase
+  var c = n.callee;
+  if (!c) return null;
+  var ci = c.object && c.object.type === 'Identifier' && c.object.name === 'path' && c.property && c.property.type === 'Identifier' && c.property.name === 'resolve';
+  if (!ci) return null;
+  return { v1: n.arguments.map(reconstruct).join(', ') };
+}
+
+module.exports.visitor_USESCWD = function (node) {
+  // eslint-disable-line camelcase
+  var was = void 0;
+
+  was = visitor_USESCWD(node);
+  if (was) return { alias: was.v1 };
+
+  return null;
+};
+
+function reconstruct(node) {
+  var v = generate(node).replace(/\n/g, '');
+  var v2 = void 0;
+  while (true) {
+    v2 = v.replace(/\[ /g, '[').replace(/ \]/g, ']').replace(/ {2}/g, ' ');
+    if (v2 === v) break;
+    v = v2;
+  }
+  return v2;
+}
+
+function traverse(ast, visitor) {
+  // modified esprima-walk to support
+  // visitor return value and "trying" flag
+  var stack = [[ast, false]];
+  var i = void 0,
+      j = void 0,
+      key = void 0;
+  var len = void 0,
+      item = void 0,
+      node = void 0,
+      trying = void 0,
+      child = void 0;
+  for (i = 0; i < stack.length; i += 1) {
+    item = stack[i];
+    node = item[0];
+    if (node) {
+      trying = item[1] || node.type === 'TryStatement';
+      if (visitor(node, trying)) {
+        for (key in node) {
+          child = node[key];
+          if (child instanceof Array) {
+            len = child.length;
+            for (j = 0; j < len; j += 1) {
+              stack.push([child[j], trying]);
+            }
+          } else if (child && typeof child.type === 'string') {
+            stack.push([child, trying]);
+          }
+        }
+      }
+    }
+  }
+}
+
+module.exports.parse = function (body) {
+  return parse(body, {
+    ecmaVersion: 8,
+    allowReturnOutsideFunction: true
+  });
+};
+
+module.exports.detect = function (body, visitor) {
+  var json = module.exports.parse(body);
+  if (!json) return;
+  traverse(json, visitor);
+};
